@@ -13,6 +13,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application source
 COPY src/ src/
+# Выпуск ключей (scripts/mcp-keys.sh): хост берёт скрипт отсюда и запускает в taiga-back
+COPY scripts/mcp_keys.py scripts/mcp_keys.py
 
 # Install the project itself (non-editable) so uv run doesn't need to write at runtime
 RUN uv sync --frozen --no-dev --no-editable
