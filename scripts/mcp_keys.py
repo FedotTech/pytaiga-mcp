@@ -5,7 +5,11 @@ by scripts/mcp-keys.sh, which passes the command in MCP_KEYS_ARGS:
 
     issue <username|email>   new key, printed once; replaces the person's old key
     list                     who has a key; flags inactive users still holding one
-    revoke <username|email>  delete the person's key
+    revoke <username|email>  delete the person's key and browser sign-in
+    oauth-app <mcp_url>      create/update the Application of the browser sign-in
+                             (TAIGA_AUTH_MODE=oauth); Taiga sends people back to
+                             <mcp_url>/oauth/taiga-callback
+    oauth-app-delete         delete it, signing everyone out of the browser sign-in
 
 Taiga stores only sha256(key) as an external-app token; the key itself is
 stored nowhere. Taiga does NOT check is_active for app tokens: when someone
@@ -18,6 +22,8 @@ import secrets
 import sys
 
 APP_ID = "pytaiga-mcp"
+OAUTH_APP_ID = "pytaiga-mcp-oauth"  # TAIGA_OAUTH_APP_ID default (src/config.py)
+APPS = {APP_ID: "key", OAUTH_APP_ID: "browser"}
 
 
 def key_hash(key):
@@ -63,12 +69,15 @@ def issue(identifier):
 def list_keys():
     from taiga.external_apps.models import ApplicationToken
 
-    tokens = ApplicationToken.objects.filter(application_id=APP_ID).select_related("user")
+    tokens = ApplicationToken.objects.filter(application_id__in=APPS).select_related("user")
     inactive = []
-    for t in tokens.order_by("user__username"):
+    for t in tokens.order_by("user__username", "application_id"):
         u = t.user
         flag = "" if u.is_active else "   <-- INACTIVE, revoke this key"
-        print(f"{t.id:>5}  {u.username:<24} {u.get_full_name():<32} active={u.is_active}{flag}")
+        print(
+            f"{t.id:>5}  {APPS[t.application_id]:<8} {u.username:<24} {u.get_full_name():<32} "
+            f"active={u.is_active}{flag}"
+        )
         if not u.is_active:
             inactive.append(u.username)
     if not tokens.exists():
@@ -85,8 +94,30 @@ def revoke(identifier):
     from taiga.external_apps.models import ApplicationToken
 
     user = _user(identifier)
-    deleted, _ = ApplicationToken.objects.filter(application_id=APP_ID, user=user).delete()
-    print(f"Key of {user.username} revoked." if deleted else f"{user.username} had no key.")
+    deleted, _ = ApplicationToken.objects.filter(application_id__in=APPS, user=user).delete()
+    print(f"Access of {user.username} revoked." if deleted else f"{user.username} had no key.")
+
+
+def oauth_app(mcp_url):
+    from taiga.external_apps.models import Application
+
+    _, created = Application.objects.update_or_create(
+        id=OAUTH_APP_ID,
+        defaults={
+            "name": "Taiga MCP",
+            "description": "AI assistants (Claude Code, Cursor) act in Taiga as you, "
+            f"through {mcp_url.rstrip('/')}/mcp",
+            "next_url": mcp_url.rstrip("/") + "/oauth/taiga-callback",
+        },
+    )
+    print(f"Application {OAUTH_APP_ID} {'created' if created else 'updated'}.")
+
+
+def oauth_app_delete():
+    from taiga.external_apps.models import Application
+
+    deleted, _ = Application.objects.filter(id=OAUTH_APP_ID).delete()
+    print(f"Application {OAUTH_APP_ID} deleted." if deleted else "No such application.")
 
 
 def main(args):
@@ -96,8 +127,15 @@ def main(args):
         list_keys()
     elif len(args) == 2 and args[0] == "revoke":
         revoke(args[1])
+    elif len(args) == 2 and args[0] == "oauth-app":
+        oauth_app(args[1])
+    elif args == ["oauth-app-delete"]:
+        oauth_app_delete()
     else:
-        sys.exit("usage: mcp-keys.sh issue <username> | list | revoke <username>")
+        sys.exit(
+            "usage: mcp-keys.sh issue <username> | list | revoke <username> "
+            "| oauth-app <mcp_url> | oauth-app-delete"
+        )
 
 
 # Only when fed by mcp-keys.sh; importing it (tests) runs nothing.

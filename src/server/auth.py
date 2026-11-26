@@ -55,7 +55,13 @@ class AppTokenVerifier:
     async def verify_token(self, token: str) -> Optional[AccessToken]:
         if not token:
             return None
-        h = key_hash(token)
+        return await self.verify_taiga_token(key_hash(token), token)
+
+    async def verify_taiga_token(
+        self, h: str, token: Optional[str] = None
+    ) -> Optional[AccessToken]:
+        """Check the Taiga app token `h` itself (browser sign-in, src/server/oauth.py)."""
+        token = token or h
         hit = self._cache.get(h)
         if hit and hit[0] > time.monotonic() and self._session_holds(hit[1].subject, h):
             return hit[1]

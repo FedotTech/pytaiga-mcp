@@ -9,12 +9,12 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import anyio
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
 
 from src import taiga_client
 from src.config import settings
-from src.server import auth, core
+from src.server import auth, core, oauth
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def _resolve_transport(argv=None, env=None) -> str:
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     if core.personal_auth:
-        logger.info("Personal keys (TAIGA_AUTH_MODE=app-token): no shared Taiga account.")
+        logger.info(f"Personal sign-in (TAIGA_AUTH_MODE={settings.auth_mode}): no shared account.")
     elif settings.has_credentials:
         logger.info("Environment credentials detected. Attempting auto-authentication...")
         try:
@@ -84,30 +84,69 @@ except ValueError:
     _mcp_port = 8000
 
 
-def _auth_kwargs() -> dict:
-    """FastMCP bearer check for TAIGA_AUTH_MODE=app-token (src/server/auth.py).
+def _oauth_problem() -> str:
+    """Why TAIGA_AUTH_MODE=oauth cannot start, or ''."""
+    if not settings.public_url:
+        return "TAIGA_AUTH_MODE=oauth: set MCP_PUBLIC_URL (e.g. https://mcp.example.com)."
+    secret = settings.oauth_secret.get_secret_value() if settings.oauth_secret else ""
+    if len(secret) < 32:
+        return "TAIGA_AUTH_MODE=oauth: MCP_OAUTH_SECRET needs 32+ chars (openssl rand -base64 32)."
+    if settings.oauth_token_ttl_days < 1:
+        return "TAIGA_OAUTH_TOKEN_TTL_DAYS must be 1 or more."
+    return ""
 
-    resource_server_url=None on purpose: the SDK then publishes no
+
+def _auth_kwargs() -> dict:
+    """FastMCP auth for TAIGA_AUTH_MODE=app-token (src/server/auth.py) or oauth (oauth.py).
+
+    app-token: resource_server_url=None on purpose: the SDK then publishes no
     /.well-known/oauth-protected-resource and its 401 carries no resource_metadata,
     so nothing points a client at an OAuth login. issuer_url is required by
     AuthSettings but unused without an auth server provider.
+
+    oauth: this server is the authorization server; personal keys are still
+    accepted (one load_access_token checks both). An incomplete config gives {}
+    here and main() refuses to start.
     """
-    if settings.auth_mode != auth.APP_TOKEN_MODE:
+    keys = auth.AppTokenVerifier(settings.host, settings.key_ttl_seconds)
+    if settings.auth_mode == auth.APP_TOKEN_MODE:
+        return {
+            "token_verifier": keys,
+            "auth": AuthSettings(issuer_url=settings.host, resource_server_url=None),
+        }
+    if settings.auth_mode != oauth.OAUTH_MODE or _oauth_problem():
         return {}
+    provider = oauth.TaigaOAuthProvider(
+        keys,
+        settings.public_url,
+        settings.taiga_public_url or settings.host,
+        settings.oauth_app_id,
+        settings.oauth_secret.get_secret_value(),
+        settings.oauth_token_ttl_days * 86400,
+    )
     return {
-        "token_verifier": auth.AppTokenVerifier(settings.host, settings.key_ttl_seconds),
-        "auth": AuthSettings(issuer_url=settings.host, resource_server_url=None),
+        "auth_server_provider": provider,
+        "auth": AuthSettings(
+            issuer_url=settings.public_url,
+            resource_server_url=provider.resource_url,
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+            validate_token_resource=False,  # load_access_token checks it (keys have none)
+        ),
     }
 
 
+_auth = _auth_kwargs()
 mcp = FastMCP(
     "Taiga",
     dependencies=["httpx"],
     lifespan=server_lifespan,
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=_mcp_port,
-    **_auth_kwargs(),
+    **_auth,
 )
+if "auth_server_provider" in _auth:
+    _auth["auth_server_provider"].add_routes(mcp)
 
 
 def tool(*args, **kwargs):
@@ -178,9 +217,12 @@ def _warn_legacy_server_mode(env=None) -> None:
 def _set_personal_auth(transport: str) -> None:
     """Turn on per-key sessions for HTTP; refuse a config that would run open."""
     mode = settings.auth_mode
-    if mode and mode != auth.APP_TOKEN_MODE:
+    if mode and mode not in (auth.APP_TOKEN_MODE, oauth.OAUTH_MODE):
         # A typo must not leave an internet-facing server on the shared account.
-        sys.exit(f"Unknown TAIGA_AUTH_MODE={mode!r}. Valid: {auth.APP_TOKEN_MODE!r} or unset.")
+        sys.exit(
+            f"Unknown TAIGA_AUTH_MODE={mode!r}. "
+            f"Valid: {auth.APP_TOKEN_MODE!r}, {oauth.OAUTH_MODE!r} or unset."
+        )
     if not mode:
         return
     if transport == "stdio":
@@ -188,9 +230,11 @@ def _set_personal_auth(transport: str) -> None:
         return
     if settings.has_credentials:
         sys.exit(
-            "TAIGA_AUTH_MODE=app-token: unset TAIGA_USERNAME/TAIGA_PASSWORD. "
-            "Each person connects with their own key; there is no shared account."
+            f"TAIGA_AUTH_MODE={mode}: unset TAIGA_USERNAME/TAIGA_PASSWORD. "
+            "Each person connects as themselves; there is no shared account."
         )
+    if mode == oauth.OAUTH_MODE and _oauth_problem():
+        sys.exit(_oauth_problem())
     core.personal_auth = True
 
 
