@@ -123,8 +123,13 @@ Client configuration without Docker:
 | `TAIGA_CLOSING_RECEIPTS` | `false` turns off the closing-receipt guard (see below) | `true` |
 | `MCP_HOST` | Bind address for the HTTP transports (`0.0.0.0` in Docker) | `127.0.0.1` |
 | `MCP_PORT` | Port for the HTTP transports | `8000` |
-| `TAIGA_AUTH_MODE` | `app-token`: on `sse` / `streamable-http`, every request needs a personal key (see below). Ignored on stdio | (off) |
+| `TAIGA_AUTH_MODE` | `app-token`: on `sse` / `streamable-http`, every request needs a personal key; `oauth`: the same plus sign-in through the browser (see below). Ignored on stdio | (off) |
 | `TAIGA_MCP_KEY_TTL_SECONDS` | How long a checked key is trusted before Taiga is asked again | `300` |
+| `MCP_PUBLIC_URL` | `oauth`: public HTTPS root of this server; MCP is at `/mcp`, `/.well-known/*` at the root | (none) |
+| `MCP_OAUTH_SECRET` | `oauth`: server key (32+ chars) that encrypts issued tokens. Changing it signs everyone out | (none) |
+| `TAIGA_PUBLIC_URL` | `oauth`: Taiga web address the browser is sent to | `TAIGA_API_URL` |
+| `TAIGA_OAUTH_APP_ID` | `oauth`: id of the Taiga external Application whose consent page is shown | `pytaiga-mcp-oauth` |
+| `TAIGA_OAUTH_TOKEN_TTL_DAYS` | `oauth`: lifetime of issued access and refresh tokens | `90` |
 
 Values can also come from a `.env` file in the project root.
 
@@ -153,6 +158,16 @@ Connect a client with the key as a bearer token, e.g. Claude Code:
 ```bash
 claude mcp add --transport http taiga https://taiga.example.com/mcp --header "Authorization: Bearer <key>"
 ```
+
+**Browser sign-in (`TAIGA_AUTH_MODE=oauth`, HTTP only).** Everything above for personal keys holds, and keys keep working on the same address. In addition the server is an OAuth authorization server for MCP clients (metadata, dynamic client registration, `/authorize`, `/token` with PKCE, `/revoke`), so a client added without a header opens the browser:
+
+```bash
+claude mcp add --transport http taiga https://mcp.example.com/mcp
+```
+
+The person signs in on Taiga's own page (`/external-apps`, the password never reaches this server) and clicks "Allow"; Taiga sends the browser back to `<MCP_PUBLIC_URL>/oauth/taiga-callback`, and the server trades Taiga's one-time code for that person's external-app token. That token is never handed out as is: access and refresh tokens are it, encrypted with `MCP_OAUTH_SECRET` (no database; client registrations are sealed into their `client_id`). Only sign-ins in progress live in memory, so run one server process. Registration accepts only `http://localhost` / `127.0.0.1` redirects or an app scheme (`cursor://...`). Taiga shows the consent page only the first time; later sign-ins pass straight through.
+
+The Application is created once on the Taiga host: `scripts/mcp-keys.sh oauth-app https://mcp.example.com` (`oauth-app-delete` removes it and signs everyone out). `list` shows both kinds of access (`key`, `browser`); `revoke <user>` removes both. A revoked sign-in stops working on the next call; a client's `/revoke` call does the same for that person.
 
 Credentials are held as secrets and never logged; request bodies, headers and tokens are never logged either.
 

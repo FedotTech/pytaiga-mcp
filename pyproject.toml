@@ -20,6 +20,8 @@ dependencies = [
     "httpx>=0.28.1",
     # Runs sync tools in worker threads (src/server/app.py:tool). Also pulled in by mcp.
     "anyio>=4.14.2",
+    # Fernet for browser sign-in tokens (src/server/oauth.py). Also pulled in by mcp.
+    "cryptography>=50.0.0",
 ]
 
 [project.scripts]

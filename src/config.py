@@ -60,6 +60,33 @@ class TaigaSettings(BaseSettings):
         description="How long a checked key is trusted before /users/me is asked again",
     )
 
+    # Sign-in through the browser (TAIGA_AUTH_MODE=oauth, src/server/oauth.py).
+    public_url: str = Field(
+        default="",
+        alias="MCP_PUBLIC_URL",
+        description="Public HTTPS root of this server, e.g. https://mcp.example.com (MCP at /mcp)",
+    )
+    taiga_public_url: str = Field(
+        default="",
+        alias="TAIGA_PUBLIC_URL",
+        description="Taiga web address the browser is sent to (default: TAIGA_API_URL)",
+    )
+    oauth_app_id: str = Field(
+        default="pytaiga-mcp-oauth",
+        alias="TAIGA_OAUTH_APP_ID",
+        description="Id of the Taiga external Application whose consent page is shown",
+    )
+    oauth_secret: Optional[SecretStr] = Field(
+        default=None,
+        alias="MCP_OAUTH_SECRET",
+        description="Server key that encrypts issued tokens and client registrations",
+    )
+    oauth_token_ttl_days: int = Field(
+        default=90,
+        alias="TAIGA_OAUTH_TOKEN_TTL_DAYS",
+        description="Lifetime of issued access and refresh tokens",
+    )
+
     class Config:
         env_file = str(ENV_FILE_PATH)
         env_file_encoding = "utf-8"
