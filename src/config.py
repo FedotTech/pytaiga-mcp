@@ -48,6 +48,18 @@ class TaigaSettings(BaseSettings):
         description="Refuse to close a story/task without a closing receipt comment",
     )
 
+    # Personal keys over HTTP (src/server/auth.py). Empty: the shared env account.
+    auth_mode: str = Field(
+        default="",
+        alias="TAIGA_AUTH_MODE",
+        description="'app-token': every HTTP request needs Authorization: Bearer <personal key>",
+    )
+    key_ttl_seconds: int = Field(
+        default=300,
+        alias="TAIGA_MCP_KEY_TTL_SECONDS",
+        description="How long a checked key is trusted before /users/me is asked again",
+    )
+
     class Config:
         env_file = str(ENV_FILE_PATH)
         env_file_encoding = "utf-8"

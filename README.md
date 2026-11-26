@@ -123,6 +123,8 @@ Client configuration without Docker:
 | `TAIGA_CLOSING_RECEIPTS` | `false` turns off the closing-receipt guard (see below) | `true` |
 | `MCP_HOST` | Bind address for the HTTP transports (`0.0.0.0` in Docker) | `127.0.0.1` |
 | `MCP_PORT` | Port for the HTTP transports | `8000` |
+| `TAIGA_AUTH_MODE` | `app-token`: on `sse` / `streamable-http`, every request needs a personal key (see below). Ignored on stdio | (off) |
+| `TAIGA_MCP_KEY_TTL_SECONDS` | How long a checked key is trusted before Taiga is asked again | `300` |
 
 Values can also come from a `.env` file in the project root.
 
@@ -133,6 +135,24 @@ Values can also come from a `.env` file in the project root.
 **Auto-authentication (recommended).** With `TAIGA_USERNAME` and `TAIGA_PASSWORD` set, the server logs in at startup and every tool uses that default session — no `session_id` needed. Taiga access tokens last 24 h; the server refreshes them automatically with the refresh token (8 days on a default Taiga), after which it needs to log in again (restart, or call `login`).
 
 **Explicit sessions.** Call `login(host, username, password)` to get a `session_id`, pass it to tools, and `logout` when done. `session_status` reports whether a session is still valid.
+
+**Personal keys (`TAIGA_AUTH_MODE=app-token`, HTTP only).** For a shared HTTP server where each person acts as themselves. Each person gets a key; Taiga stores only `sha256(key)` as an external-app token (`taiga.external_apps`, on by default) bound to that person, and the server calls Taiga with `Authorization: Application <sha256(key)>`. Everything runs with that person's rights and shows them as the author, including project creation and deletion. There is no shared account: the server refuses to start with `TAIGA_USERNAME`/`TAIGA_PASSWORD` set, `login` and `get_default_session` are refused, and a `session_id` argument is ignored. A request without a valid key gets a plain `401` (no OAuth metadata is published). A revoked key stops working on the next call.
+
+Keys are managed with `scripts/mcp-keys.sh` on the Taiga host. It runs `scripts/mcp_keys.py` through `python manage.py shell` in the `taiga-back` container of the compose project in `TAIGA_COMPOSE_DIR` (default `~/control-plane`):
+
+```bash
+scripts/mcp-keys.sh issue <username|email>   # prints the key ONCE; replaces that person's previous key
+scripts/mcp-keys.sh list                     # who holds a key; flags inactive users still holding one
+scripts/mcp-keys.sh revoke <username|email>
+```
+
+One key per person, no expiry. **When someone leaves: `revoke` first, then deactivate the account** — Taiga does not check `is_active` for app tokens (the server also refuses a key whose user `/users/me` reports inactive, but only after its cache entry expires).
+
+Connect a client with the key as a bearer token, e.g. Claude Code:
+
+```bash
+claude mcp add --transport http taiga https://taiga.example.com/mcp --header "Authorization: Bearer <key>"
+```
 
 Credentials are held as secrets and never logged; request bodies, headers and tokens are never logged either.
 
