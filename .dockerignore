@@ -3,3 +3,4 @@
 !pyproject.toml
 !uv.lock
 !src/
+!scripts/mcp_keys.py
