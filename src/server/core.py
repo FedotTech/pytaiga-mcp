@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import pydantic_core
+from mcp.server.auth.middleware.auth_context import get_access_token
 
 from src.taiga_client import (
     TaigaAPIError,
@@ -34,6 +35,9 @@ DEFAULT_SESSION_ID = "default"
 # Why the startup auto-login failed, if it did: tools report it instead of a bare
 # "No session_id provided" (#197). Set once by the lifespan.
 auto_login_error: Optional[str] = None
+# TAIGA_AUTH_MODE=app-token over HTTP (app.main sets it): every call runs as the
+# owner of the request's personal key, in session "user:<id>" (src/server/auth.py).
+personal_auth = False
 
 # Per-session lookup cache: {session_id: {"members_{pid}": [...], ...}}
 _session_cache: Dict[str, Dict[str, Any]] = {}
@@ -79,7 +83,18 @@ def _drop_session(session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _user_session_id(user_id: Any) -> str:
+    return f"user:{user_id}"
+
+
 def _get_session_id(session_id: Optional[str] = None) -> str:
+    if personal_auth:
+        # The caller's own key decides the session: a passed session_id is ignored,
+        # so nobody can borrow another person's session, and there is no "default".
+        token = get_access_token()
+        if token is None or not token.subject:
+            raise PermissionError("Personal key required: send Authorization: Bearer <key>.")
+        return _user_session_id(token.subject)
     if session_id:
         return session_id
     if DEFAULT_SESSION_ID in active_sessions:

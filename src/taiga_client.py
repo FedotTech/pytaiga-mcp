@@ -235,9 +235,13 @@ class TaigaHTTP:
         host: str,
         timeout: float = 30.0,
         transport: Optional[httpx.BaseTransport] = None,
+        auth_scheme: str = "Bearer",
     ):
         if not host:
             raise ValueError("Taiga host URL cannot be empty.")
+        # "Application" for an external-app token (src/server/auth.py): it has no
+        # refresh token, so a 401 is final (refresh() returns False).
+        self.auth_scheme = auth_scheme
         # TAIGA_API_URL is the host; API_PATH is added below. Accept a URL that
         # already ends in /api/v1 too (many configs do), instead of 404ing on
         # .../api/v1/api/v1/auth (#197).
@@ -400,7 +404,7 @@ class TaigaHTTP:
     def _raw(self, method, path, params, json, files, headers, token, data=None) -> httpx.Response:
         request_headers = dict(headers or {})
         if token:
-            request_headers["Authorization"] = f"Bearer {token}"
+            request_headers["Authorization"] = f"{self.auth_scheme} {token}"
         try:
             return self._http.request(
                 method,

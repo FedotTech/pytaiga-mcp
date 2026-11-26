@@ -19,11 +19,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _refuse_in_personal_mode() -> None:
+    if core.personal_auth:
+        raise ValueError(
+            "This server signs in only by personal key (Authorization: Bearer <key>); "
+            "every call already runs as the key's owner. No login or session_id needed."
+        )
+
+
 @app.tool(
     "get_default_session",
     description="Returns the default session ID if auto-authentication from environment variables was successful.",
 )
 def get_default_session() -> Dict[str, Any]:
+    _refuse_in_personal_mode()
     if core.DEFAULT_SESSION_ID in core.active_sessions:
         client = core.active_sessions[core.DEFAULT_SESSION_ID]
         if client and client.is_authenticated:
@@ -47,6 +56,7 @@ def login(
     username: Optional[str] = None,
     password: Optional[str] = None,
 ) -> Dict[str, str]:
+    _refuse_in_personal_mode()
     actual_host = host or settings.host
     actual_username = username or settings.get_username_value()
     actual_password = password or settings.get_password_value()
